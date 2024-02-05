@@ -1,0 +1,13 @@
+#version 330 core
+
+in vec2 UV;
+in vec2 texCoord;
+in float light;
+out vec3 color;
+
+uniform sampler2D myTextureSampler;
+
+void main()
+{
+	color = light * texture(myTextureSampler, 0.0625 * fract(UV) + texCoord).rgb;
+}

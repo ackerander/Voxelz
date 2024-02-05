@@ -24,7 +24,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.linkLibC();
+    exe.addIncludePath(.{ .path = "glad/include" });
+    exe.addIncludePath(.{ .path = "src/include" });
+    exe.addCSourceFiles(.{ .files = &[_][]const u8{ "glad/src/gl.c", "src/loadPng.c" }, .flags = &[_][]const u8{ "", "-Wall -Wextra -pdeantic -std=c99" } });
     exe.linkSystemLibrary("glfw");
+    exe.linkSystemLibrary("png");
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

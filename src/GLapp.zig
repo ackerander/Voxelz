@@ -21,22 +21,31 @@ const GLerror = error{
     TexLoadErr,
 };
 
-var window: *gl.GLFWwindow = undefined;
-var vert_arr_id: gl.GLuint = undefined;
-var prog_id: gl.GLuint = undefined;
-var matrix_id: gl.GLint = undefined;
-var texture: gl.GLuint = undefined;
-var vert_buff: gl.GLuint = undefined;
-var offset_buff: gl.GLuint = undefined;
-var span_buff: gl.GLuint = undefined;
-var face_buff: gl.GLuint = undefined;
-var tex_buff: gl.GLuint = undefined;
-var view_mat: math.Mat4 = undefined;
-var draw_dist: u8 = 9;
+const GLinfo = struct {
+    window: *gl.GLFWwindow,
+    vert_arr_id: gl.GLuint,
+    prog_id: gl.GLuint,
+    matrix_id: gl.GLint,
+    texture: gl.GLuint,
+    vert_buff: gl.GLuint,
+    offset_buff: gl.GLuint,
+    span_buff: gl.GLuint,
+    face_buff: gl.GLuint,
+    tex_buff: gl.GLuint,
+    draw_dist: u8,
+};
+const Camera = struct {
+    position: math.Vec3,
+    theta: f32,
+    rho: f32,
+    cursor: [2]f64 = [2]f64{ 0.5 * SCREEN.w, 0.5 * SCREEN.h },
+};
 
+var gl_info: GLinfo = undefined;
+var camera: Camera = undefined;
 var game: Game = undefined;
 
-pub fn init() !void {
+pub fn init(draw_dist: u8) !void {
     game = try Game.newGame();
     // GLFW setup
     if (gl.glfwInit() == 0) {
@@ -53,18 +62,17 @@ pub fn init() !void {
     gl.glfwWindowHint(gl.GLFW_OPENGL_PROFILE, gl.GLFW_OPENGL_CORE_PROFILE);
     // To make MacOS happy (not needed)
     gl.glfwWindowHint(gl.GLFW_OPENGL_FORWARD_COMPAT, gl.GL_TRUE);
-    window = gl.glfwCreateWindow(SCREEN.w, SCREEN.h, "GLFW Zig", null, null) orelse {
+    gl_info.window = gl.glfwCreateWindow(SCREEN.w, SCREEN.h, "GLFW Zig", null, null) orelse {
         std.debug.print("GLFW couldn't open window\n", .{});
         return GLerror.WindowErr;
     };
-    errdefer gl.glfwDestroyWindow(window);
-    gl.glfwMakeContextCurrent(window);
+    errdefer gl.glfwDestroyWindow(gl_info.window);
+    gl.glfwMakeContextCurrent(gl_info.window);
 
-    gl.glfwSetInputMode(window, gl.GLFW_CURSOR, gl.GLFW_CURSOR_DISABLED);
-    gl.glfwSetCursorPos(window, SCREEN.w / 2, SCREEN.h / 2);
-    // TODO: handle inputs
-    // gl.glfwSetKeyCallback(window, handleKey);
-    // gl.glfwSetCursorPosCallback(window, handleMouse);
+    gl.glfwSetInputMode(gl_info.window, gl.GLFW_CURSOR, gl.GLFW_CURSOR_DISABLED);
+    gl.glfwSetCursorPos(gl_info.window, SCREEN.w / 2, SCREEN.h / 2);
+    _ = gl.glfwSetKeyCallback(gl_info.window, handleKey);
+    _ = gl.glfwSetCursorPosCallback(gl_info.window, handleMouse);
 
     // GLAD setup
     if (gl.gladLoadGL(@ptrCast(&gl.glfwGetProcAddress)) == 0) {
@@ -78,70 +86,75 @@ pub fn init() !void {
     gl.glDepthFunc(gl.GL_LESS);
     gl.glEnable(gl.GL_CULL_FACE);
 
-    gl.glGenVertexArrays(1, &vert_arr_id);
-    errdefer gl.glDeleteVertexArrays(1, &vert_arr_id);
-    gl.glBindVertexArray(vert_arr_id);
+    gl.glGenVertexArrays(1, &gl_info.vert_arr_id);
+    errdefer gl.glDeleteVertexArrays(1, &gl_info.vert_arr_id);
+    gl.glBindVertexArray(gl_info.vert_arr_id);
 
-    prog_id = try loadShaders();
-    errdefer gl.glDeleteProgram(prog_id);
-    matrix_id = gl.glGetUniformLocation(prog_id, "MVP");
+    gl_info.prog_id = try loadShaders();
+    errdefer gl.glDeleteProgram(gl_info.prog_id);
+    gl_info.matrix_id = gl.glGetUniformLocation(gl_info.prog_id, "MVP");
 
+    // TODO: OpenGL error handling
     // Load texture atlas
-    texture = try loadTex();
-    if (texture == 0) return GLerror.TexLoadErr;
-    errdefer gl.glDeleteTextures(1, &texture);
-    const tex_id = gl.glGetUniformLocation(prog_id, "myTextureSampler");
+    gl_info.texture = try loadTex();
+    if (gl_info.texture == 0) return GLerror.TexLoadErr;
+    // errdefer gl.glDeleteTextures(1, &gl_info.texture);
+    const tex_id = gl.glGetUniformLocation(gl_info.prog_id, "myTextureSampler");
 
     // Allocate buffers
     const vert_data = [4]gl.GLubyte{ 0, 1, 2, 3 };
-    gl.glGenBuffers(1, @constCast(&vert_buff));
-    errdefer gl.glDeleteBuffers(1, &vert_buff);
-    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vert_buff);
+    gl.glGenBuffers(1, @constCast(&gl_info.vert_buff));
+    // errdefer gl.glDeleteBuffers(1, &gl_info.vert_buff);
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.vert_buff);
     gl.glBufferData(gl.GL_ARRAY_BUFFER, vert_data.len, &vert_data, gl.GL_STATIC_DRAW);
 
-    const max_faces = MAXMESH * math.cube(u32, draw_dist - 2);
+    gl_info.draw_dist = draw_dist;
+    const max_faces = MAXMESH * math.cube(u32, gl_info.draw_dist - 2);
     // TODO: Sparse buffers, allowing for less memory usage
     // (registry.khronos.org/OpenGL/extensions/ARB/ARB_sparse_buffer.txt)
-    gl.glGenBuffers(1, @constCast(&offset_buff));
-    errdefer gl.glDeleteBuffers(1, &offset_buff);
-    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, offset_buff);
+    gl.glGenBuffers(1, @constCast(&gl_info.offset_buff));
+    // errdefer gl.glDeleteBuffers(1, &gl_info.offset_buff);
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.offset_buff);
     gl.glBufferData(gl.GL_ARRAY_BUFFER, 3 * max_faces * @sizeOf(gl.GLint), null, gl.GL_STATIC_DRAW);
     gl.glVertexAttribDivisor(1, 1);
 
-    gl.glGenBuffers(1, @constCast(&span_buff));
-    errdefer gl.glDeleteBuffers(1, &span_buff);
-    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, span_buff);
+    gl.glGenBuffers(1, @constCast(&gl_info.span_buff));
+    // errdefer gl.glDeleteBuffers(1, &gl_info.span_buff);
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.span_buff);
     gl.glBufferData(gl.GL_ARRAY_BUFFER, 2 * max_faces * @sizeOf(gl.GLint), null, gl.GL_DYNAMIC_DRAW);
     gl.glVertexAttribDivisor(2, 1);
 
-    gl.glGenBuffers(1, @constCast(&face_buff));
-    errdefer gl.glDeleteBuffers(1, &face_buff);
-    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, face_buff);
+    gl.glGenBuffers(1, @constCast(&gl_info.face_buff));
+    // errdefer gl.glDeleteBuffers(1, &gl_info.face_buff);
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.face_buff);
     gl.glBufferData(gl.GL_ARRAY_BUFFER, max_faces, null, gl.GL_DYNAMIC_DRAW);
     gl.glVertexAttribDivisor(3, 1);
 
-    gl.glGenBuffers(1, @constCast(&tex_buff));
-    errdefer gl.glDeleteBuffers(1, &tex_buff);
-    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, tex_buff);
+    gl.glGenBuffers(1, @constCast(&gl_info.tex_buff));
+    // errdefer gl.glDeleteBuffers(1, &gl_info.tex_buff);
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.tex_buff);
     gl.glBufferData(gl.GL_ARRAY_BUFFER, max_faces, null, gl.GL_DYNAMIC_DRAW);
     gl.glVertexAttribDivisor(4, 1);
 
     // Texture
     gl.glActiveTexture(gl.GL_TEXTURE0);
-    gl.glBindTexture(gl.GL_TEXTURE_2D, texture);
+    gl.glBindTexture(gl.GL_TEXTURE_2D, gl_info.texture);
     gl.glUniform1i(tex_id, 0);
 
-    gl.glUseProgram(prog_id);
+    gl.glUseProgram(gl_info.prog_id);
     gl.glEnableVertexAttribArray(0);
-    errdefer gl.glDisableVertexAttribArray(0);
+    // errdefer gl.glDisableVertexAttribArray(0);
     gl.glEnableVertexAttribArray(1);
-    errdefer gl.glDisableVertexAttribArray(1);
+    // errdefer gl.glDisableVertexAttribArray(1);
     gl.glEnableVertexAttribArray(2);
-    errdefer gl.glDisableVertexAttribArray(2);
+    // errdefer gl.glDisableVertexAttribArray(2);
     gl.glEnableVertexAttribArray(3);
-    errdefer gl.glDisableVertexAttribArray(3);
+    // errdefer gl.glDisableVertexAttribArray(3);
     gl.glEnableVertexAttribArray(4);
-    errdefer gl.glDisableVertexAttribArray(4);
+    // errdefer gl.glDisableVertexAttribArray(4);
+
+    // Init camera
+    camera = Camera{ .position = @splat(-5), .theta = 0.9, .rho = 0.6 };
 }
 
 pub fn deinit() void {
@@ -151,15 +164,15 @@ pub fn deinit() void {
     gl.glDisableVertexAttribArray(2);
     gl.glDisableVertexAttribArray(1);
     gl.glDisableVertexAttribArray(0);
-    gl.glDeleteBuffers(1, &tex_buff);
-    gl.glDeleteBuffers(1, &face_buff);
-    gl.glDeleteBuffers(1, &span_buff);
-    gl.glDeleteBuffers(1, &offset_buff);
-    gl.glDeleteBuffers(1, &vert_buff);
-    gl.glDeleteTextures(1, &texture);
-    gl.glDeleteProgram(prog_id);
-    gl.glDeleteVertexArrays(1, &vert_arr_id);
-    gl.glfwDestroyWindow(window);
+    gl.glDeleteBuffers(1, &gl_info.tex_buff);
+    gl.glDeleteBuffers(1, &gl_info.face_buff);
+    gl.glDeleteBuffers(1, &gl_info.span_buff);
+    gl.glDeleteBuffers(1, &gl_info.offset_buff);
+    gl.glDeleteBuffers(1, &gl_info.vert_buff);
+    gl.glDeleteTextures(1, &gl_info.texture);
+    gl.glDeleteProgram(gl_info.prog_id);
+    gl.glDeleteVertexArrays(1, &gl_info.vert_arr_id);
+    gl.glfwDestroyWindow(gl_info.window);
     gl.glfwTerminate();
 }
 
@@ -168,55 +181,52 @@ pub fn mainLoop() void {
 
     writeMeshes();
 
-    const h_angle = 0.9;
-    const v_angle = 0.6;
-    const dir = math.Vec3{ @cos(v_angle) * @sin(h_angle), @sin(v_angle), @cos(v_angle) * @cos(h_angle) };
-    const up = math.cross(math.Vec3{ @sin(h_angle - 0.5 * std.math.pi), 0, @cos(h_angle - 0.5 * std.math.pi) }, dir);
-    const position: math.Vec3 = @splat(-5);
-    view_mat = math.lookAt(position, position + dir, up);
-    const mvp = math.mul(perspec_mat, view_mat);
+    var last_t = gl.glfwGetTime();
 
-    while (gl.glfwWindowShouldClose(window) == 0) {
+    while (gl.glfwWindowShouldClose(gl_info.window) == 0) {
+        const new_t = gl.glfwGetTime();
+        const view_mat = updateView(@floatCast(new_t - last_t));
+        const mvp = math.mul(perspec_mat, view_mat);
+
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT);
+        gl.glUniformMatrix4fv(gl_info.matrix_id, 1, gl.GL_TRUE, @ptrCast(&mvp));
 
-        // updateView();
-
-        gl.glUniformMatrix4fv(matrix_id, 1, gl.GL_TRUE, @ptrCast(&mvp));
-
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vert_buff);
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.vert_buff);
         gl.glVertexAttribIPointer(0, 1, gl.GL_UNSIGNED_BYTE, 0, null);
 
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, offset_buff);
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.offset_buff);
         gl.glVertexAttribIPointer(1, 3, gl.GL_INT, 0, null);
 
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, span_buff);
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.span_buff);
         gl.glVertexAttribIPointer(2, 2, gl.GL_UNSIGNED_BYTE, 0, null);
 
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, face_buff);
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.face_buff);
         gl.glVertexAttribIPointer(3, 1, gl.GL_UNSIGNED_BYTE, 0, null);
 
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, tex_buff);
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.tex_buff);
         gl.glVertexAttribIPointer(4, 1, gl.GL_UNSIGNED_BYTE, 0, null);
 
         const size: i32 = @intCast(game.faces.len);
         gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, size);
-        gl.glfwSwapBuffers(window);
+        gl.glfwSwapBuffers(gl_info.window);
 
         gl.glfwPollEvents();
+        last_t = new_t;
     }
 }
 
+// Internal functions
 fn writeMeshes() void {
     const faces = game.faces;
     const size: isize = @intCast(faces.len);
     const ptrs = faces.slice();
-    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, offset_buff);
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.offset_buff);
     gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, 3 * size * @sizeOf(i32), @ptrCast(ptrs.items(.positions)));
-    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, span_buff);
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.span_buff);
     gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, 2 * size, @ptrCast(ptrs.items(.spans)));
-    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, face_buff);
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.face_buff);
     gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, size, @ptrCast(ptrs.items(.dir)));
-    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, tex_buff);
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.tex_buff);
     gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, size, @ptrCast(ptrs.items(.texture)));
 }
 
@@ -297,4 +307,51 @@ fn loadTex() !gl.GLuint {
     gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR);
     gl.glGenerateMipmap(gl.GL_TEXTURE_2D);
     return tex;
+}
+
+fn handleMouse(win: ?*gl.GLFWwindow, xpos: f64, ypos: f64) callconv(.C) void {
+    _ = win;
+    const MOUSESPD = 5e-4;
+
+    camera.theta += @floatCast(MOUSESPD * (camera.cursor[0] - xpos));
+    camera.rho += @floatCast(MOUSESPD * (camera.cursor[1] - ypos));
+    camera.cursor = [2]f64{ xpos, ypos };
+}
+const KeyStates = std.bit_set.IntegerBitSet(6);
+var key_states = KeyStates.initEmpty();
+fn handleKey(win: ?*gl.GLFWwindow, key: i32, scancode: i32, action: i32, mods: i32) callconv(.C) void {
+    _ = mods;
+    _ = scancode;
+    _ = win;
+    if (action == gl.GLFW_PRESS or action == gl.GLFW_RELEASE) {
+        const idx: u8 = switch (key) {
+            gl.GLFW_KEY_A => 0,
+            gl.GLFW_KEY_D => 1,
+            gl.GLFW_KEY_S => 2,
+            gl.GLFW_KEY_W => 3,
+            gl.GLFW_KEY_LEFT_CONTROL => 4,
+            gl.GLFW_KEY_LEFT_SHIFT => 5,
+            else => return,
+        };
+        key_states.setValue(idx, action == gl.GLFW_PRESS);
+    }
+}
+// TODO: better timer
+fn updateView(delta_t: f32) math.Mat4 {
+    const dir = math.Vec3{ @cos(camera.rho) * @sin(camera.theta), @sin(camera.rho), @cos(camera.rho) * @cos(camera.theta) };
+    const right = math.Vec3{ @sin(camera.theta - 0.5 * std.math.pi), 0, @cos(camera.theta - 0.5 * std.math.pi) };
+    const up = math.cross(right, dir);
+    const displacement = @as(math.Vec3, @splat(getAxis(0))) * right + @as(math.Vec3, @splat(getAxis(1))) * dir + @as(math.Vec3, @splat(getAxis(2))) * up;
+    camera.position += @as(math.Vec3, @splat(delta_t)) * displacement;
+
+    return math.lookAt(camera.position, camera.position + dir, up);
+}
+fn getAxis(axis: u3) f32 {
+    return switch ((key_states.mask >> (2 * axis)) & 0b11) {
+        0 => 0,
+        1 => -1,
+        2 => 1,
+        3 => 0,
+        else => unreachable,
+    };
 }

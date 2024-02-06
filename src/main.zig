@@ -1,7 +1,7 @@
-const GLapp = @import("GLapp.zig").GLapp;
+const GLapp = @import("GLapp.zig");
 
 pub fn main() !void {
-    var app = try GLapp.init();
-    app.mainLoop();
-    app.deinit();
+    try GLapp.init();
+    GLapp.mainLoop();
+    GLapp.deinit();
 }

@@ -1,7 +1,7 @@
 const std = @import("std");
 const malloc = std.heap.c_allocator;
 const math = @import("math.zig");
-const Game = @import("game.zig").Game;
+const game = @import("game.zig");
 const gl = @cImport({
     @cInclude("glad/gl.h");
     @cInclude("GLFW/glfw3.h");
@@ -9,9 +9,6 @@ const gl = @cImport({
 });
 
 const SCREEN = .{ .w = 1400, .h = 1050 };
-const CHUNK = 32;
-const CHUNK_SZ = CHUNK * CHUNK * CHUNK;
-const MAXMESH = 3 * CHUNK_SZ / 4;
 
 const GLerror = error{
     GLFWinitErr,
@@ -43,10 +40,10 @@ const Camera = struct {
 
 var gl_info: GLinfo = undefined;
 var camera: Camera = undefined;
-var game: Game = undefined;
+var game_data: game.Game = undefined;
 
 pub fn init(draw_dist: u8) !void {
-    game = try Game.newGame();
+    game_data = try game.Game.newGame();
     // GLFW setup
     if (gl.glfwInit() == 0) {
         std.debug.print("GLFW couldn't initalize\n", .{});
@@ -109,7 +106,7 @@ pub fn init(draw_dist: u8) !void {
     gl.glBufferData(gl.GL_ARRAY_BUFFER, vert_data.len, &vert_data, gl.GL_STATIC_DRAW);
 
     gl_info.draw_dist = draw_dist;
-    const max_faces = MAXMESH * math.cube(u32, gl_info.draw_dist - 2);
+    const max_faces = game.MAXMESH * math.cube(u32, gl_info.draw_dist - 2);
     // TODO: Sparse buffers, allowing for less memory usage
     // (registry.khronos.org/OpenGL/extensions/ARB/ARB_sparse_buffer.txt)
     gl.glGenBuffers(1, @constCast(&gl_info.offset_buff));
@@ -158,7 +155,7 @@ pub fn init(draw_dist: u8) !void {
 }
 
 pub fn deinit() void {
-    game.quitGame();
+    game_data.quitGame();
     gl.glDisableVertexAttribArray(4);
     gl.glDisableVertexAttribArray(3);
     gl.glDisableVertexAttribArray(2);
@@ -180,6 +177,7 @@ pub fn mainLoop() void {
     const perspec_mat: math.Mat4 = math.perspec(0.25 * std.math.pi, 4.0 / 3.0, 0.1, 100);
 
     writeMeshes();
+    const size = game_data.faces.len;
 
     var last_t = gl.glfwGetTime();
 
@@ -206,8 +204,7 @@ pub fn mainLoop() void {
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.tex_buff);
         gl.glVertexAttribIPointer(4, 1, gl.GL_UNSIGNED_BYTE, 0, null);
 
-        const size: i32 = @intCast(game.faces.len);
-        gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, size);
+        gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, @intCast(size));
         gl.glfwSwapBuffers(gl_info.window);
 
         gl.glfwPollEvents();
@@ -217,7 +214,7 @@ pub fn mainLoop() void {
 
 // Internal functions
 fn writeMeshes() void {
-    const faces = game.faces;
+    const faces = game_data.faces;
     const size: isize = @intCast(faces.len);
     const ptrs = faces.slice();
     gl.glBindBuffer(gl.GL_ARRAY_BUFFER, gl_info.offset_buff);
@@ -342,7 +339,7 @@ fn updateView(delta_t: f32) math.Mat4 {
     const right = math.Vec3{ @sin(camera.theta - 0.5 * std.math.pi), 0, @cos(camera.theta - 0.5 * std.math.pi) };
     const up = math.cross(right, dir);
     const displacement = @as(math.Vec3, @splat(getAxis(0))) * right + @as(math.Vec3, @splat(getAxis(1))) * dir + @as(math.Vec3, @splat(getAxis(2))) * up;
-    camera.position += @as(math.Vec3, @splat(delta_t)) * displacement;
+    camera.position += @as(math.Vec3, @splat(4 * delta_t)) * displacement;
 
     return math.lookAt(camera.position, camera.position + dir, up);
 }
